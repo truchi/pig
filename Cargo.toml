@@ -1,0 +1,12 @@
+[package]
+name = "pig"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+colored = "2.0.4"
+openapiv3 = "1.0.3"
+serde = "1.0.188"
+serde_yaml = "0.9.25"
+tera = "1.19.1"
+thiserror = "1.0.48"
