@@ -1,5 +1,8 @@
-use crate::{config::Config, PigResult};
+use super::{INFO, WARN};
+use crate::{config::Config, resolver::Resolver, PigResult};
+use colored::Colorize;
 use openapiv3::OpenAPI;
+use std::fs::{create_dir_all, write, File};
 use tera::Tera;
 
 #[derive(Debug)]
@@ -10,17 +13,40 @@ pub struct Pig {
 impl Pig {
     const JINJA: &'static str = ".jinja";
 
-    pub fn new(config: Config) -> Self {
-        Self { config }
+    pub fn new() -> PigResult<Self> {
+        Ok(Self {
+            config: Config::from_args()?,
+        })
     }
 
     pub fn run(&self) -> PigResult<()> {
+        println!(
+            "{INFO} {} {}",
+            "Using config file:".green(),
+            self.config.path.display().to_string().blue(),
+        );
+
+        if self.config.entries.is_empty() {
+            println!("{WARN} {}", "No entries found in config".yellow());
+            return Ok(());
+        }
+
         for config in &self.config.entries {
-            let openapi =
-                serde_yaml::from_reader::<_, OpenAPI>(std::fs::File::open(&config.openapi)?)?;
-            dbg!(&openapi.paths.paths);
-            let context = tera::Context::from_serialize(&openapi)?;
-            dbg!(&context);
+            // Resolve openapi
+            let openapi = Resolver::new(&config.openapi)?.resolve()?;
+
+            // Write context files
+            write(
+                config.output.as_path().join(".pig.context.json"),
+                serde_json::to_string_pretty(&openapi)?,
+            )?;
+            write(
+                config.output.as_path().join(".pig.context.yaml"),
+                serde_yaml::to_string(&openapi)?,
+            )?;
+
+            // Setup tera
+            let context = tera::Context::from_value(openapi)?;
             let tera = Tera::new(
                 &config
                     .input
@@ -30,14 +56,16 @@ impl Pig {
                     .to_string(),
             )?;
 
+            // Render templates
             for template in tera.get_template_names() {
                 let path = config.output.as_path().join({
-                    let len = template.len();
-                    &template[..len - Self::JINJA.len()]
+                    // Remove .jinja extension
+                    let len = template.len() - Self::JINJA.len();
+                    &template[..len]
                 });
 
-                std::fs::create_dir_all(path.parent().unwrap())?;
-                tera.render_to(template, &context, std::fs::File::create(path)?)?;
+                create_dir_all(path.parent().unwrap())?;
+                tera.render_to(template, &context, File::create(path)?)?;
             }
         }
 

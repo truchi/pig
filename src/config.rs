@@ -36,19 +36,17 @@ impl Config {
     }
 
     fn from_cwd() -> PigResult<Self> {
-        let mut path = std::env::current_dir()?;
+        let mut path = std::env::current_dir()?.join(Self::FILE);
 
-        while !path.as_path().join(Self::FILE).exists() {
-            let parent = path.parent();
-
-            if let Some(parent) = parent {
-                path = parent.to_path_buf();
+        while !path.exists() {
+            if let Some(parent) = path.parent().and_then(|parent| parent.parent()) {
+                path = parent.to_path_buf().join(Self::FILE);
             } else {
                 return Err(PigError::ConfigNotFound(Self::FILE.into()));
             }
         }
 
-        Self::from_file(path.join(Self::FILE))
+        Self::from_file(path)
     }
 
     fn from_file<T: AsRef<Path>>(path: T) -> PigResult<Self> {

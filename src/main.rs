@@ -1,8 +1,12 @@
+#![allow(unused)]
+
 mod config;
 mod pig;
+mod resolver;
 
 use crate::{config::Config, pig::Pig};
 use colored::Colorize;
+use resolver::Resolver;
 use std::path::PathBuf;
 
 const INFO: &'static str = "💡";
@@ -16,8 +20,11 @@ pub enum PigError {
     #[error("Io: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Serde: {0}")]
-    Serde(#[from] serde_yaml::Error),
+    #[error("Yaml: {0}")]
+    Yaml(#[from] serde_yaml::Error),
+
+    #[error("Json: {0}")]
+    Json(#[from] serde_json::Error),
 
     #[error("Tera: {0:#?}")]
     Tera(#[from] tera::Error),
@@ -33,27 +40,15 @@ pub enum PigError {
 }
 
 fn main() {
-    if let Err(err) = main2() {
+    let resolved = Resolver::new(".ignore/openapi.yaml")
+        .unwrap()
+        .resolve()
+        .unwrap();
+
+    dbg!(&resolved);
+
+    if let PigResult::Err(err) = (|| Ok(Pig::new()?.run()?))() {
         println!("{ERROR} {}", err.to_string().red());
         std::process::exit(1);
     }
-}
-
-fn main2() -> PigResult<()> {
-    let config = Config::from_args()?;
-
-    println!(
-        "{INFO} {} {}",
-        "Using config file:".green(),
-        config.path.display().to_string().blue(),
-    );
-
-    if config.entries.is_empty() {
-        println!("{WARN} {}", "No entries found in config".yellow());
-        return Ok(());
-    }
-
-    Pig::new(config).run()?;
-
-    Ok(())
 }

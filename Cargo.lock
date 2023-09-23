@@ -513,6 +513,7 @@ dependencies = [
  "colored",
  "openapiv3",
  "serde",
+ "serde_json",
  "serde_yaml",
  "tera",
  "thiserror",
