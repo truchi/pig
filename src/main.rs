@@ -1,6 +1,7 @@
 //! 🦀 OpenAPI code generation 🐷
 //!
 //! # TODO
+//! - [x] README
 //! - [x] Parse CLI args
 //! - [x] Resolve $refs
 //! - [x] Render templates
