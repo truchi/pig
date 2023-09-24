@@ -1,9 +1,12 @@
 [package]
 name = "pig"
+authors = ["🇫🇷 Romain TRUCHI"]
 version = "0.1.0"
 edition = "2021"
+description = "🦀 OpenAPI code generation 🐷"
 
 [dependencies]
+clap = { version = "4.4.4", features = ["derive"] }
 colored = "2.0.4"
 notify = "6.1.1"
 openapiv3 = "1.0.3"

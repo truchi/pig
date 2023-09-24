@@ -1,9 +1,21 @@
 use crate::{PigError, PigResult};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
 };
+
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Args {
+    /// Watch mode
+    #[arg(short, long)]
+    watch: bool,
+
+    /// Path of the `pig.yaml` file (leave empty to search upwards from the current directory)
+    config: Option<PathBuf>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConfigEntry {
@@ -18,6 +30,7 @@ pub struct ConfigEntry {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     pub file: PathBuf,
+    pub watch: bool,
     pub entries: Vec<ConfigEntry>,
 }
 
@@ -25,41 +38,52 @@ impl Config {
     const FILE: &'static str = "pig.yaml";
 
     pub fn new() -> PigResult<Self> {
-        Self::read(Self::find()?)
-    }
+        let args = Args::parse();
 
-    pub fn find() -> PigResult<PathBuf> {
-        let mut args = std::env::args();
-        let (_, path) = (args.next(), args.next());
-
-        if let Some(path) = path.map(PathBuf::from) {
-            if path.is_file() {
-                Ok(path)
-            } else {
-                Err(PigError::NotAFile(path))
+        let file = if let Some(file) = args.config {
+            if !file.is_file() {
+                return Err(PigError::NotAFile(file));
             }
-        } else {
-            let mut path = std::env::current_dir()?.join(Self::FILE);
 
-            while !path.exists() {
-                if let Some(parent) = path.parent().and_then(|parent| parent.parent()) {
-                    path = parent.to_path_buf().join(Self::FILE);
+            file
+        } else {
+            let mut file = std::env::current_dir()?.join(Self::FILE);
+
+            while !file.exists() {
+                if let Some(parent) = file.parent().and_then(|parent| parent.parent()) {
+                    file = parent.to_path_buf().join(Self::FILE);
                 } else {
                     return Err(PigError::ConfigNotFound(Self::FILE.into()));
                 }
             }
 
-            Ok(path)
+            file
+        };
+
+        let config = std::fs::read_to_string(&file);
+
+        match config {
+            Ok(config) => Ok(Self {
+                file: file.canonicalize()?,
+                watch: args.watch,
+                entries: serde_yaml::from_str::<Vec<ConfigEntry>>(&config)?,
+            }
+            .validate()?),
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                Err(PigError::ConfigNotFound(file.into()))
+            }
+            Err(err) => Err(err.into()),
         }
     }
 
-    pub fn read<T: AsRef<Path>>(file: T) -> PigResult<Self> {
+    fn read<T: AsRef<Path>>(file: T) -> PigResult<Self> {
         let file = file.as_ref();
         let config = std::fs::read_to_string(file);
 
         match config {
             Ok(config) => Ok(Self {
                 file: file.canonicalize()?,
+                watch: false,
                 entries: serde_yaml::from_str::<Vec<ConfigEntry>>(&config)?,
             }
             .validate()?),

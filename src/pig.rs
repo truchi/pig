@@ -22,9 +22,17 @@ pub enum Pig {}
 impl Pig {
     const JINJA: &'static str = ".jinja";
 
-    pub fn run() -> PigResult<()> {
+    pub fn oink() -> PigResult<()> {
         let config = Config::new()?;
 
+        if config.watch {
+            Pig::watch(config)
+        } else {
+            Pig::run(config)
+        }
+    }
+
+    fn run(config: Config) -> PigResult<()> {
         for config in &config.entries {
             let context = Pig::context(config)?;
             let tera = Pig::tera(config)?;
@@ -35,8 +43,8 @@ impl Pig {
         Ok(())
     }
 
-    pub fn watch() -> PigResult<()> {
-        Watcher::new()?.watch()
+    fn watch(config: Config) -> PigResult<()> {
+        Watcher::new(config)?.watch()
     }
 
     fn context(config: &ConfigEntry) -> PigResult<Context> {
@@ -95,8 +103,7 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    pub fn new() -> PigResult<Self> {
-        let config = Config::read(&Config::find()?)?;
+    pub fn new(config: Config) -> PigResult<Self> {
         let (sender, receiver) = std::sync::mpsc::channel();
         let mut config_watcher = RecommendedWatcher::new(
             Watcher::handler(sender.clone(), Event::ConfigModifyData),
@@ -161,7 +168,7 @@ impl Watcher {
 
         for event in self.receiver {
             match event {
-                Event::ConfigModifyData(_) => return Self::new()?.watch(),
+                Event::ConfigModifyData(_) => return Self::new(Config::new()?)?.watch(),
                 Event::OpenapiModifyData(i, _) => {
                     self.entries[i].context()?;
                     self.entries[i].render()?;

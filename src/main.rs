@@ -43,8 +43,9 @@ pub enum PigError {
 }
 
 fn main() {
-    if let Err(err) = (|| Pig::watch())() {
+    if let Err(err) = Pig::oink() {
         println!("{ERROR} {}", err.to_string().red());
+
         std::process::exit(1);
     }
 }
