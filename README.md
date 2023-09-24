@@ -49,7 +49,7 @@ Options:
 References are resolved into the referenced object, adding:
 - `$ref`: the `$ref` string (file path resolved), e.g. `/path/to/file.yaml#/path/to/Object`
 - `$file`: the file path part of the `$ref`, e.g. `/path/to/file.yaml`
-- `$keys`: the key part of the `$ref`, e.g. `/path/to/Object`
+- `$keys`: the key part of the `$ref` as an array, e.g. `["path", "to", "Object"]`
 - `$name`: the last key of the `$ref`, e.g. `Object`
 
 `Pig` detects circular references.
