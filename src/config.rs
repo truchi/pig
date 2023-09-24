@@ -17,57 +17,61 @@ pub struct ConfigEntry {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
-    pub path: PathBuf,
+    pub file: PathBuf,
     pub entries: Vec<ConfigEntry>,
 }
 
 impl Config {
     const FILE: &'static str = "pig.yaml";
 
-    pub fn from_args() -> PigResult<Self> {
+    pub fn new() -> PigResult<Self> {
+        Self::read(Self::find()?)
+    }
+
+    pub fn find() -> PigResult<PathBuf> {
         let mut args = std::env::args();
-        let (_, path) = (args.next().unwrap(), args.next());
+        let (_, path) = (args.next(), args.next());
 
-        if let Some(path) = path {
-            Self::from_file(path)
-        } else {
-            Self::from_cwd()
-        }
-    }
-
-    fn from_cwd() -> PigResult<Self> {
-        let mut path = std::env::current_dir()?.join(Self::FILE);
-
-        while !path.exists() {
-            if let Some(parent) = path.parent().and_then(|parent| parent.parent()) {
-                path = parent.to_path_buf().join(Self::FILE);
+        if let Some(path) = path.map(PathBuf::from) {
+            if path.is_file() {
+                Ok(path)
             } else {
-                return Err(PigError::ConfigNotFound(Self::FILE.into()));
+                Err(PigError::NotAFile(path))
             }
-        }
+        } else {
+            let mut path = std::env::current_dir()?.join(Self::FILE);
 
-        Self::from_file(path)
+            while !path.exists() {
+                if let Some(parent) = path.parent().and_then(|parent| parent.parent()) {
+                    path = parent.to_path_buf().join(Self::FILE);
+                } else {
+                    return Err(PigError::ConfigNotFound(Self::FILE.into()));
+                }
+            }
+
+            Ok(path)
+        }
     }
 
-    fn from_file<T: AsRef<Path>>(path: T) -> PigResult<Self> {
-        let path = path.as_ref();
-        let config = std::fs::read_to_string(path);
+    pub fn read<T: AsRef<Path>>(file: T) -> PigResult<Self> {
+        let file = file.as_ref();
+        let config = std::fs::read_to_string(file);
 
         match config {
             Ok(config) => Ok(Self {
-                path: path.canonicalize()?,
+                file: file.canonicalize()?,
                 entries: serde_yaml::from_str::<Vec<ConfigEntry>>(&config)?,
             }
             .validate()?),
             Err(err) if err.kind() == ErrorKind::NotFound => {
-                Err(PigError::ConfigNotFound(path.into()))
+                Err(PigError::ConfigNotFound(file.into()))
             }
             Err(err) => Err(err.into()),
         }
     }
 
     fn validate(mut self) -> PigResult<Self> {
-        let folder = self.path.parent().unwrap();
+        let folder = self.file.parent().unwrap();
 
         for entry in &mut self.entries {
             entry.openapi = {

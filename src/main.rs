@@ -29,6 +29,9 @@ pub enum PigError {
     #[error("Tera: {0:#?}")]
     Tera(#[from] tera::Error),
 
+    #[error("Watch: {0:#?}")]
+    Watch(#[from] notify::Error),
+
     #[error("Config not found: {0}")]
     ConfigNotFound(PathBuf),
 
@@ -40,14 +43,7 @@ pub enum PigError {
 }
 
 fn main() {
-    let resolved = Resolver::new(".ignore/openapi.yaml")
-        .unwrap()
-        .resolve()
-        .unwrap();
-
-    dbg!(&resolved);
-
-    if let PigResult::Err(err) = (|| Ok(Pig::new()?.run()?))() {
+    if let Err(err) = (|| Pig::watch())() {
         println!("{ERROR} {}", err.to_string().red());
         std::process::exit(1);
     }
