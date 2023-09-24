@@ -1,16 +1,12 @@
-use super::{INFO, WARN};
 use crate::{
     config::{Config, ConfigEntry},
     resolver::Resolver,
-    PigResult,
+    Args, PigResult,
 };
-use colored::Colorize;
+use clap::Parser;
 use notify::{event::DataChange, RecommendedWatcher, RecursiveMode, Watcher as _};
-use openapiv3::OpenAPI;
-use serde_json::Value as Json;
 use std::{
     fs::{create_dir_all, write, File},
-    path::{Path, PathBuf},
     sync::mpsc::{Receiver, Sender},
     time::Duration,
 };
@@ -22,9 +18,7 @@ pub enum Pig {}
 impl Pig {
     const JINJA: &'static str = ".jinja";
 
-    pub fn oink() -> PigResult<()> {
-        let config = Config::new()?;
-
+    pub fn oink(config: Config) -> PigResult<()> {
         if config.watch {
             Pig::watch(config)
         } else {
@@ -75,12 +69,13 @@ impl Pig {
 
     fn render(config: &ConfigEntry, tera: &Tera, context: &Context) -> PigResult<()> {
         for template in tera.get_template_names() {
-            let path = config
-                .output
-                .join((|len| &template[..len])(template.len() - Pig::JINJA.len()));
+            let path = config.output.join({
+                let len = template.len() - Pig::JINJA.len();
+                &template[..len]
+            });
 
             create_dir_all(path.parent().unwrap())?;
-            tera.render_to(template, &context, File::create(path)?)?;
+            tera.render_to(template, context, File::create(path)?)?;
         }
 
         Ok(())
@@ -89,15 +84,14 @@ impl Pig {
 
 #[derive(Debug)]
 enum Event {
-    ConfigModifyData(DataChange),
-    OpenapiModifyData(usize, DataChange),
-    InputModifyData(usize, DataChange),
+    Config(DataChange),
+    Openapi(usize, DataChange),
+    Input(usize, DataChange),
 }
 
 pub struct Watcher {
     config: Config,
     config_watcher: RecommendedWatcher,
-    sender: Sender<Event>,
     receiver: Receiver<Event>,
     entries: Vec<WatcherEntry>,
 }
@@ -105,8 +99,8 @@ pub struct Watcher {
 impl Watcher {
     pub fn new(config: Config) -> PigResult<Self> {
         let (sender, receiver) = std::sync::mpsc::channel();
-        let mut config_watcher = RecommendedWatcher::new(
-            Watcher::handler(sender.clone(), Event::ConfigModifyData),
+        let config_watcher = RecommendedWatcher::new(
+            Watcher::handler(sender.clone(), Event::Config),
             Watcher::config(),
         )?;
         let entries = config
@@ -119,7 +113,6 @@ impl Watcher {
         Ok(Self {
             config,
             config_watcher,
-            sender,
             receiver,
             entries,
         })
@@ -127,18 +120,16 @@ impl Watcher {
 
     fn handler(
         sender: Sender<Event>,
-        modify_data_event: impl Fn(DataChange) -> Event,
+        f: impl Fn(DataChange) -> Event,
     ) -> impl Fn(Result<notify::Event, notify::Error>) {
-        move |notify_event: Result<notify::Event, notify::Error>| match notify_event {
-            Ok(notify_event) => match notify_event.kind {
+        move |event: Result<notify::Event, notify::Error>| match event {
+            Ok(event) => match event.kind {
                 notify::EventKind::Any => {}
                 notify::EventKind::Access(_) => {}
                 notify::EventKind::Create(_) => {}
                 notify::EventKind::Modify(modify) => match modify {
                     notify::event::ModifyKind::Any => {}
-                    notify::event::ModifyKind::Data(data) => {
-                        sender.send(modify_data_event(data)).unwrap()
-                    }
+                    notify::event::ModifyKind::Data(data) => sender.send(f(data)).unwrap(),
                     notify::event::ModifyKind::Metadata(_) => {}
                     notify::event::ModifyKind::Name(_) => {}
                     notify::event::ModifyKind::Other => {}
@@ -146,7 +137,7 @@ impl Watcher {
                 notify::EventKind::Remove(_) => {}
                 notify::EventKind::Other => {}
             },
-            Err(error) => println!("Error: {error:?}"),
+            Err(error) => panic!("Error: {error:?}"),
         }
     }
 
@@ -168,12 +159,12 @@ impl Watcher {
 
         for event in self.receiver {
             match event {
-                Event::ConfigModifyData(_) => return Self::new(Config::new()?)?.watch(),
-                Event::OpenapiModifyData(i, _) => {
+                Event::Config(_) => return Self::new(Config::new(Args::parse())?)?.watch(),
+                Event::Openapi(i, _) => {
                     self.entries[i].context()?;
                     self.entries[i].render()?;
                 }
-                Event::InputModifyData(i, _) => {
+                Event::Input(i, _) => {
                     self.entries[i].tera()?;
                     self.entries[i].render()?;
                 }
@@ -185,7 +176,6 @@ impl Watcher {
 }
 
 pub struct WatcherEntry {
-    index: usize,
     config: ConfigEntry,
     openapi_watcher: RecommendedWatcher,
     input_watcher: RecommendedWatcher,
@@ -196,17 +186,12 @@ pub struct WatcherEntry {
 impl WatcherEntry {
     fn new(config: ConfigEntry, index: usize, sender: Sender<Event>) -> PigResult<Self> {
         Ok(Self {
-            index,
             openapi_watcher: RecommendedWatcher::new(
-                Watcher::handler(sender.clone(), move |event| {
-                    Event::OpenapiModifyData(index, event)
-                }),
+                Watcher::handler(sender.clone(), move |event| Event::Openapi(index, event)),
                 Watcher::config(),
             )?,
             input_watcher: RecommendedWatcher::new(
-                Watcher::handler(sender.clone(), move |event| {
-                    Event::InputModifyData(index, event)
-                }),
+                Watcher::handler(sender.clone(), move |event| Event::Input(index, event)),
                 Watcher::config(),
             )?,
             context: Pig::context(&config)?,

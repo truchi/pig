@@ -1,21 +1,6 @@
-use crate::{PigError, PigResult};
-use clap::Parser;
+use crate::{Args, PigError, PigResult};
 use serde::{Deserialize, Serialize};
-use std::{
-    io::ErrorKind,
-    path::{Path, PathBuf},
-};
-
-#[derive(Parser, Debug)]
-#[command(author, version, about)]
-struct Args {
-    /// Watch mode
-    #[arg(short, long)]
-    watch: bool,
-
-    /// Path of the `pig.yaml` file (leave empty to search upwards from the current directory)
-    config: Option<PathBuf>,
-}
+use std::{io::ErrorKind, path::PathBuf};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConfigEntry {
@@ -37,9 +22,7 @@ pub struct Config {
 impl Config {
     const FILE: &'static str = "pig.yaml";
 
-    pub fn new() -> PigResult<Self> {
-        let args = Args::parse();
-
+    pub fn new(args: Args) -> PigResult<Self> {
         let file = if let Some(file) = args.config {
             if !file.is_file() {
                 return Err(PigError::NotAFile(file));
@@ -69,27 +52,7 @@ impl Config {
                 entries: serde_yaml::from_str::<Vec<ConfigEntry>>(&config)?,
             }
             .validate()?),
-            Err(err) if err.kind() == ErrorKind::NotFound => {
-                Err(PigError::ConfigNotFound(file.into()))
-            }
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    fn read<T: AsRef<Path>>(file: T) -> PigResult<Self> {
-        let file = file.as_ref();
-        let config = std::fs::read_to_string(file);
-
-        match config {
-            Ok(config) => Ok(Self {
-                file: file.canonicalize()?,
-                watch: false,
-                entries: serde_yaml::from_str::<Vec<ConfigEntry>>(&config)?,
-            }
-            .validate()?),
-            Err(err) if err.kind() == ErrorKind::NotFound => {
-                Err(PigError::ConfigNotFound(file.into()))
-            }
+            Err(err) if err.kind() == ErrorKind::NotFound => Err(PigError::ConfigNotFound(file)),
             Err(err) => Err(err.into()),
         }
     }

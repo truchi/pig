@@ -1,17 +1,28 @@
-#![allow(unused)]
+//! 🦀 OpenAPI code generation 🐷
+//!
+//! # TODO
+//! - [x] Parse CLI args
+//! - [x] Resolve $refs
+//! - [x] Render templates
+//! - [x] Watch mode
+//! - [ ] Error handling
+//! - [ ] Error reporting
+//! - [ ] Watch `openapi.yaml` dependencies
+//! - [ ] Clean output directory
+//! - [ ] Template functions (cases, dbg, ...)
 
 mod config;
 mod pig;
 mod resolver;
 
 use crate::{config::Config, pig::Pig};
+use clap::Parser;
 use colored::Colorize;
-use resolver::Resolver;
 use std::path::PathBuf;
 
-const INFO: &'static str = "💡";
-const WARN: &'static str = "🚧";
-const ERROR: &'static str = "🚨";
+// const INFO: &str = "💡";
+// const WARN: &str = "🚧";
+const ERROR: &str = "🚨";
 
 pub type PigResult<T> = Result<T, PigError>;
 
@@ -42,8 +53,19 @@ pub enum PigError {
     NotADirectory(PathBuf),
 }
 
-fn main() {
-    if let Err(err) = Pig::oink() {
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+pub struct Args {
+    /// Watch mode
+    #[arg(short, long)]
+    watch: bool,
+
+    /// Path of the `pig.yaml` file (leave empty to search upwards from the current directory)
+    config: Option<PathBuf>,
+}
+
+pub fn main() {
+    if let Err(err) = (|| Pig::oink(Config::new(Args::parse())?))() {
         println!("{ERROR} {}", err.to_string().red());
 
         std::process::exit(1);

@@ -1,12 +1,10 @@
 use crate::PigResult;
 use openapiv3::OpenAPI;
-use serde_json::{Map, Value as Json};
-use serde_yaml::Value as Yaml;
+use serde_json::{json, Value as Json};
 use std::{
     collections::HashMap,
     fs::File,
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -132,33 +130,23 @@ impl Resolver {
                             );
                         }
 
-                        let extension = Map::from_iter([
-                            ("$ref".into(), Json::String(reference.to_string())),
-                            (
-                                "$file".into(),
-                                Json::String(reference.file.display().to_string()),
-                            ),
-                            (
-                                "$keys".into(),
-                                Json::Array(
-                                    reference
-                                        .keys
-                                        .iter()
-                                        .map(|key| key.as_str().into())
-                                        .collect(),
-                                ),
-                            ),
-                            (
-                                "$name".into(),
-                                Json::String(
-                                    reference
-                                        .keys
-                                        .last()
-                                        .expect("Empty reference keys")
-                                        .to_string(),
-                                ),
-                            ),
-                        ]);
+                        let extension = json!({
+                            "$ref": reference.to_string(),
+                            "$file": reference.file.display().to_string(),
+                            "$keys": reference
+                                .keys
+                                .iter()
+                                .map(|key| key.as_str().into())
+                                .collect::<Vec<Json>>(),
+                            "$name": reference
+                                .keys
+                                .last()
+                                .expect("Empty reference keys")
+                                .to_string(),
+                        })
+                        .as_object()
+                        .unwrap()
+                        .clone();
 
                         *value = {
                             let mut value = resolver.load(&reference.file)?;
@@ -175,8 +163,7 @@ impl Resolver {
                             resolve(resolver, &mut value, references)?;
                             references.pop();
 
-                            let mut object =
-                                value.as_object_mut().expect("$ref is not a YAML object");
+                            let object = value.as_object_mut().expect("$ref is not a YAML object");
 
                             for key in object.keys() {
                                 if extension.contains_key(key) {
@@ -185,7 +172,6 @@ impl Resolver {
                             }
 
                             object.extend(extension);
-
                             value
                         };
                     } else {
@@ -231,15 +217,16 @@ impl Resolver {
                     let mut value = value.clone();
 
                     if let Some(object) = value.as_object_mut() {
-                        object.insert("openapi".into(), openapi.into());
-                        object.insert(
-                            "info".into(),
-                            Json::from_iter([
-                                ("title".to_string(), String::new()),
-                                ("version".to_string(), String::new()),
-                            ]),
+                        object.extend(
+                            json!({
+                                "openapi": openapi,
+                                "info": { "title": "", "version": "" },
+                                "paths": {},
+                            })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
                         );
-                        object.insert("paths".into(), Json::Object(Default::default()));
                     }
 
                     // Make sure the file deserializes correctly into OpenAPI
