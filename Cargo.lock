@@ -730,6 +730,7 @@ dependencies = [
  "serde_yaml",
  "tera",
  "thiserror",
+ "walkdir",
 ]
 
 [[package]]

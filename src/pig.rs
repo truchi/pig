@@ -8,32 +8,49 @@ use notify::{event::DataChange, RecommendedWatcher, RecursiveMode, Watcher as _}
 use std::{
     collections::HashSet,
     fs::{create_dir_all, write, File},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{Receiver, Sender},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tera::{Context, Tera};
+use walkdir::WalkDir;
 
 #[derive(Debug)]
 pub enum Pig {}
 
 impl Pig {
     const JINJA: &'static str = ".jinja";
+    const JSON_CONTEXT: &'static str = ".pig.context.json";
+    const YAML_CONTEXT: &'static str = ".pig.context.yaml";
+    const TRASH: &'static str = ".pig.trash";
 
     pub fn oink(config: Config) -> PigResult<()> {
         if config.watch {
-            Pig::watch(config)
+            Self::watch(config)
         } else {
-            Pig::run(config)
+            Self::run(config)
         }
     }
 
     fn run(config: Config) -> PigResult<()> {
-        for config in &config.entries {
-            let (_, context) = Pig::context(config)?;
-            let tera = Pig::tera(config)?;
+        let data = config
+            .entries
+            .iter()
+            .map(|entry| {
+                let (_, context) = Pig::context(entry)?;
+                let tera = Pig::tera(entry)?;
 
-            Pig::render(config, &tera, &context)?;
+                Ok((entry, tera, context))
+            })
+            .collect::<PigResult<Vec<_>>>()?;
+
+        Self::clean(
+            &config,
+            data.iter().map(|(config, tera, _)| (*config, tera)),
+        )?;
+
+        for (config, tera, context) in data {
+            Self::render(config, &tera, &context)?;
         }
 
         Ok(())
@@ -47,11 +64,11 @@ impl Pig {
         let (dependencies, openapi) = Resolver::new(&config.openapi)?.resolve()?;
 
         write(
-            config.output.as_path().join(".pig.context.json"),
+            config.output.as_path().join(Self::JSON_CONTEXT),
             serde_json::to_string_pretty(&openapi)?,
         )?;
         write(
-            config.output.as_path().join(".pig.context.yaml"),
+            config.output.as_path().join(Self::YAML_CONTEXT),
             serde_yaml::to_string(&openapi)?,
         )?;
 
@@ -69,15 +86,85 @@ impl Pig {
         )?)
     }
 
+    fn output(config: &ConfigEntry, template: &str) -> PathBuf {
+        let len = template.len() - Pig::JINJA.len();
+
+        config.output.join(&template[..len])
+    }
+
+    fn clean<'a, T: IntoIterator<Item = (&'a ConfigEntry, &'a Tera)>>(
+        config: &Config,
+        it: T,
+    ) -> PigResult<()> {
+        let outputs = {
+            let mut outputs = HashSet::new();
+
+            for (config, tera) in it {
+                for template in tera.get_template_names() {
+                    let output = Self::output(config, template);
+
+                    if !outputs.contains(&output) {
+                        outputs.insert(output);
+                    } else {
+                        panic!("Conflicting output file: {}", output.display());
+                    }
+                }
+            }
+
+            outputs
+        };
+
+        let mut trash = {
+            let trash = config.file.parent().unwrap().join(Self::TRASH).join(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis()
+                    .to_string(),
+            );
+            let mut created = false;
+
+            move |config: &ConfigEntry, path: &Path| {
+                if !created {
+                    create_dir_all(&trash)?;
+                    created = true;
+                }
+
+                std::fs::rename(path, trash.join(path.strip_prefix(&config.output).unwrap()))?;
+
+                PigResult::Ok(())
+            }
+        };
+
+        for config in &config.entries {
+            let json_context = config.output.join(Self::JSON_CONTEXT);
+            let yaml_context = config.output.join(Self::YAML_CONTEXT);
+
+            for result in WalkDir::new(&config.output).follow_links(true) {
+                let entry = result?;
+
+                if !entry.file_type().is_file()
+                    || entry.path().starts_with(&json_context)
+                    || entry.path().starts_with(&yaml_context)
+                {
+                    continue;
+                }
+
+                if !outputs.contains(entry.path()) {
+                    trash(config, entry.path())?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn render(config: &ConfigEntry, tera: &Tera, context: &Context) -> PigResult<()> {
         for template in tera.get_template_names() {
-            let path = config.output.join({
-                let len = template.len() - Pig::JINJA.len();
-                &template[..len]
-            });
+            let output = Self::output(config, template);
 
-            create_dir_all(path.parent().unwrap())?;
-            tera.render_to(template, context, File::create(path)?)?;
+            create_dir_all(output.parent().unwrap())?;
+            tera.render_to(template, context, File::create(output)?)?;
         }
 
         Ok(())
@@ -147,19 +234,44 @@ impl Watcher {
         notify::Config::default().with_poll_interval(Duration::from_millis(200))
     }
 
-    fn watch(mut self) -> PigResult<()> {
-        for entry in &mut self.entries {
-            entry.init()?;
-        }
+    fn clean(&self) -> PigResult<()> {
+        Pig::clean(
+            &self.config,
+            self.entries
+                .iter()
+                .map(|entry| (&entry.config, &entry.tera)),
+        )?;
 
+        Ok(())
+    }
+
+    fn watch(mut self) -> PigResult<()> {
         self.config_watcher
             .watch(self.config.file.as_path(), RecursiveMode::Recursive)?;
 
-        for event in self.receiver {
+        for entry in &mut self.entries {
+            entry.watch()?;
+        }
+
+        self.clean()?;
+
+        for entry in &mut self.entries {
+            entry.render()?;
+        }
+
+        for event in &self.receiver {
             match event {
                 Event::Config(_) => return Self::new(Config::new(Args::parse())?)?.watch(),
-                Event::Openapi(i, _) => self.entries[i].on_openapi()?,
-                Event::Input(i, _) => self.entries[i].on_input()?,
+                Event::Openapi(i, _) => {
+                    self.entries[i].on_openapi()?;
+                    self.clean()?;
+                    self.entries[i].render()?;
+                }
+                Event::Input(i, _) => {
+                    self.entries[i].on_input()?;
+                    self.clean()?;
+                    self.entries[i].render()?;
+                }
             }
         }
 
@@ -194,11 +306,9 @@ impl WatcherEntry {
         })
     }
 
-    fn init(&mut self) -> PigResult<()> {
+    fn watch(&mut self) -> PigResult<()> {
         (self.dependencies, self.context) = Pig::context(&self.config)?;
         self.tera = Pig::tera(&self.config)?;
-
-        Pig::render(&self.config, &self.tera, &self.context)?;
 
         for dependency in &self.dependencies {
             self.openapi_watcher
@@ -223,14 +333,16 @@ impl WatcherEntry {
                 .watch(dependency, RecursiveMode::Recursive)?;
         }
 
-        Pig::render(&self.config, &self.tera, &self.context)?;
-
         Ok(())
     }
 
     fn on_input(&mut self) -> PigResult<()> {
         self.tera = Pig::tera(&self.config)?;
 
+        Ok(())
+    }
+
+    fn render(&self) -> PigResult<()> {
         Pig::render(&self.config, &self.tera, &self.context)?;
 
         Ok(())

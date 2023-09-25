@@ -7,7 +7,7 @@
 //! - [x] Render templates
 //! - [x] Watch mode
 //! - [x] Watch `openapi.yaml` dependencies
-//! - [ ] Clean output directory
+//! - [x] Clean output directory
 //! - [ ] Run post generation command
 //! - [ ] Template functions (cases, dbg, ...)
 //! - [ ] Error handling
@@ -41,6 +41,9 @@ pub enum PigError {
 
     #[error("Tera: {0:#?}")]
     Tera(#[from] tera::Error),
+
+    #[error("Walk: {0:#?}")]
+    Walkk(#[from] walkdir::Error),
 
     #[error("Watch: {0:#?}")]
     Watch(#[from] notify::Error),
