@@ -2,7 +2,7 @@ use crate::PigResult;
 use openapiv3::OpenAPI;
 use serde_json::{json, Value as Json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     path::{Path, PathBuf},
 };
@@ -84,7 +84,7 @@ impl Resolver {
         Ok(resolver)
     }
 
-    pub fn resolve(mut self) -> PigResult<Json> {
+    pub fn resolve(mut self) -> PigResult<(HashSet<PathBuf>, Json)> {
         fn resolve(
             resolver: &mut Resolver,
             value: &mut Json,
@@ -188,7 +188,11 @@ impl Resolver {
         let mut output = self.files.get(&self.file).unwrap().clone();
         resolve(&mut self, &mut output, &mut Vec::new())?;
 
-        Ok(output)
+        let len = self.files.len();
+        let dependencies = self.files.into_keys().collect::<HashSet<_>>();
+        assert!(dependencies.len() == len);
+
+        Ok((dependencies, output))
     }
 }
 

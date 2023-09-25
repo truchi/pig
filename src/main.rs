@@ -6,11 +6,12 @@
 //! - [x] Resolve $refs
 //! - [x] Render templates
 //! - [x] Watch mode
+//! - [x] Watch `openapi.yaml` dependencies
+//! - [ ] Clean output directory
+//! - [ ] Run post generation command
+//! - [ ] Template functions (cases, dbg, ...)
 //! - [ ] Error handling
 //! - [ ] Error reporting
-//! - [ ] Watch `openapi.yaml` dependencies
-//! - [ ] Clean output directory
-//! - [ ] Template functions (cases, dbg, ...)
 
 mod config;
 mod pig;

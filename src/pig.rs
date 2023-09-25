@@ -6,7 +6,9 @@ use crate::{
 use clap::Parser;
 use notify::{event::DataChange, RecommendedWatcher, RecursiveMode, Watcher as _};
 use std::{
+    collections::HashSet,
     fs::{create_dir_all, write, File},
+    path::PathBuf,
     sync::mpsc::{Receiver, Sender},
     time::Duration,
 };
@@ -28,7 +30,7 @@ impl Pig {
 
     fn run(config: Config) -> PigResult<()> {
         for config in &config.entries {
-            let context = Pig::context(config)?;
+            let (_, context) = Pig::context(config)?;
             let tera = Pig::tera(config)?;
 
             Pig::render(config, &tera, &context)?;
@@ -41,8 +43,8 @@ impl Pig {
         Watcher::new(config)?.watch()
     }
 
-    fn context(config: &ConfigEntry) -> PigResult<Context> {
-        let openapi = Resolver::new(&config.openapi)?.resolve()?;
+    fn context(config: &ConfigEntry) -> PigResult<(HashSet<PathBuf>, Context)> {
+        let (dependencies, openapi) = Resolver::new(&config.openapi)?.resolve()?;
 
         write(
             config.output.as_path().join(".pig.context.json"),
@@ -53,7 +55,7 @@ impl Pig {
             serde_yaml::to_string(&openapi)?,
         )?;
 
-        Ok(Context::from_value(openapi)?)
+        Ok((dependencies, Context::from_value(openapi)?))
     }
 
     fn tera(config: &ConfigEntry) -> PigResult<Tera> {
@@ -146,28 +148,18 @@ impl Watcher {
     }
 
     fn watch(mut self) -> PigResult<()> {
-        for entry in &self.entries {
-            entry.render()?;
+        for entry in &mut self.entries {
+            entry.init()?;
         }
 
         self.config_watcher
             .watch(self.config.file.as_path(), RecursiveMode::Recursive)?;
 
-        for entry in &mut self.entries {
-            entry.watch()?;
-        }
-
         for event in self.receiver {
             match event {
                 Event::Config(_) => return Self::new(Config::new(Args::parse())?)?.watch(),
-                Event::Openapi(i, _) => {
-                    self.entries[i].context()?;
-                    self.entries[i].render()?;
-                }
-                Event::Input(i, _) => {
-                    self.entries[i].tera()?;
-                    self.entries[i].render()?;
-                }
+                Event::Openapi(i, _) => self.entries[i].on_openapi()?,
+                Event::Input(i, _) => self.entries[i].on_input()?,
             }
         }
 
@@ -179,6 +171,7 @@ pub struct WatcherEntry {
     config: ConfigEntry,
     openapi_watcher: RecommendedWatcher,
     input_watcher: RecommendedWatcher,
+    dependencies: HashSet<PathBuf>,
     context: Context,
     tera: Tera,
 }
@@ -186,6 +179,7 @@ pub struct WatcherEntry {
 impl WatcherEntry {
     fn new(config: ConfigEntry, index: usize, sender: Sender<Event>) -> PigResult<Self> {
         Ok(Self {
+            config,
             openapi_watcher: RecommendedWatcher::new(
                 Watcher::handler(sender.clone(), move |event| Event::Openapi(index, event)),
                 Watcher::config(),
@@ -194,35 +188,50 @@ impl WatcherEntry {
                 Watcher::handler(sender.clone(), move |event| Event::Input(index, event)),
                 Watcher::config(),
             )?,
-            context: Pig::context(&config)?,
-            tera: Pig::tera(&config)?,
-            config,
+            dependencies: Default::default(),
+            context: Default::default(),
+            tera: Default::default(),
         })
     }
 
-    fn render(&self) -> PigResult<()> {
+    fn init(&mut self) -> PigResult<()> {
+        (self.dependencies, self.context) = Pig::context(&self.config)?;
+        self.tera = Pig::tera(&self.config)?;
+
+        Pig::render(&self.config, &self.tera, &self.context)?;
+
+        for dependency in &self.dependencies {
+            self.openapi_watcher
+                .watch(dependency, RecursiveMode::Recursive)?;
+        }
+
+        self.input_watcher
+            .watch(&self.config.input, RecursiveMode::Recursive)?;
+
+        Ok(())
+    }
+
+    fn on_openapi(&mut self) -> PigResult<()> {
+        for dependency in &self.dependencies {
+            self.openapi_watcher.unwatch(dependency)?;
+        }
+
+        (self.dependencies, self.context) = Pig::context(&self.config)?;
+
+        for dependency in &self.dependencies {
+            self.openapi_watcher
+                .watch(dependency, RecursiveMode::Recursive)?;
+        }
+
         Pig::render(&self.config, &self.tera, &self.context)?;
 
         Ok(())
     }
 
-    fn context(&mut self) -> PigResult<()> {
-        self.context = Pig::context(&self.config)?;
-
-        Ok(())
-    }
-
-    fn tera(&mut self) -> PigResult<()> {
+    fn on_input(&mut self) -> PigResult<()> {
         self.tera = Pig::tera(&self.config)?;
 
-        Ok(())
-    }
-
-    fn watch(&mut self) -> PigResult<()> {
-        self.openapi_watcher
-            .watch(self.config.openapi.as_path(), RecursiveMode::Recursive)?;
-        self.input_watcher
-            .watch(self.config.input.as_path(), RecursiveMode::Recursive)?;
+        Pig::render(&self.config, &self.tera, &self.context)?;
 
         Ok(())
     }
